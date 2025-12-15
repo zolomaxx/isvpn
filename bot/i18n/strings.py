@@ -4,7 +4,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "ru": {
         # === Common Buttons ===
         "btn.shop": "🏪 Магазин",
-        "btn.rules": "📜 Правила",
+        "btn.rules": "📜 Инструкция",
         "btn.profile": "👤 Профиль",
         "btn.support": "🆘 Поддержка",
         "btn.channel": "ℹ Новостной канал",
@@ -30,7 +30,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "btn.admin.replenish_user": "💸 Пополнить баланс",
 
         # === Titles / Generic Texts ===
-        "menu.title": "⛩️ Основное меню",
+        "menu.title": "🛍 Основное меню",
         "profile.caption": "👤 <b>Профиль</b> — <a href='tg://user?id={id}'>{name}</a>",
         "rules.not_set": "❌ Правила не были добавлены",
 
