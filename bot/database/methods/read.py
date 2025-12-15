@@ -2,7 +2,7 @@ import asyncio
 import datetime
 from decimal import Decimal
 from functools import wraps
-from typing import Optional, Dict 
+from typing import Optional, Dict
 
 from sqlalchemy import func, exists
 
@@ -46,6 +46,7 @@ def _day_window(date_str: str) -> tuple[datetime.datetime, datetime.datetime]:
     start = datetime.datetime.combine(d, datetime.time.min)
     end = start + datetime.timedelta(days=1)
     return start, end
+
 
 def check_user(telegram_id: int | str) -> Optional[User]:
     """Return user by Telegram ID or None if not found."""
