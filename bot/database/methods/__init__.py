@@ -5,4 +5,5 @@ from bot.database.methods.delete import *
 from bot.database.methods.lazy_queries import *
 from bot.database.methods.transactions import *
 from bot.database.methods.cache_utils import *
-from .transactions import buy_item_transaction, process_payment_with_referral
+from bot.database.methods.transactions import buy_item_transaction, process_payment_with_referral
+EOF
