@@ -51,13 +51,26 @@ def add_values_to_item(item_name: str, value: str, is_infinity: bool,
 
     with Database().session() as s:
         # Проверяем дубликаты только для текстовых товаров
-        if not is_file and s.query(
-                exists().where(
-                    ItemValues.item_name == item_name,
-                    ItemValues.value == value_norm
-                )
-        ).scalar():
-            return False
+        # Для файловых товаров проверяем по имени файла и содержимому
+        if is_file:
+            # Проверяем, существует ли уже такой файл
+            existing = s.query(ItemValues).filter(
+                ItemValues.item_name == item_name,
+                ItemValues.file_name == file_name,
+                ItemValues.is_file == True
+            ).first()
+            if existing:
+                return False
+        else:
+            # Для текстовых товаров проверяем по значению
+            if s.query(
+                    exists().where(
+                        ItemValues.item_name == item_name,
+                        ItemValues.value == value_norm,
+                        ItemValues.is_file == False
+                    )
+            ).scalar():
+                return False
 
         try:
             s.add(ItemValues(
@@ -71,7 +84,11 @@ def add_values_to_item(item_name: str, value: str, is_infinity: bool,
                 file_size=file_size
             ))
             return True
-        except IntegrityError:
+        except IntegrityError as e:
+            logger.error(f"IntegrityError in add_values_to_item: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error in add_values_to_item: {e}")
             return False
 
 

@@ -105,7 +105,7 @@ async def adding_value_to_position(call: CallbackQuery, state):
     await state.update_data(is_infinity=(answer == 'yes'))
 
     if answer == 'no':
-        # "Finish adding" button will appear after the first value is provided
+        # “Finish adding” button will appear after the first value is provided
         await call.message.edit_text(
             localize('admin.goods.add.values.prompt_multi'),
             reply_markup=back("goods_management")
@@ -158,14 +158,14 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     category_name = data.get('item_category')
     raw_values: list[dict] = data.get("item_values", []) or []
 
+    # Сначала создаем товар (позицию) в базе
+    create_item(item_name, item_description, item_price, category_name)
+
     added = 0
     skipped_db_dup = 0
     skipped_batch_dup = 0
     skipped_invalid = 0
     seen_in_batch: set[str] = set()
-
-    # Create position
-    create_item(item_name, item_description, item_price, category_name)
 
     for item in raw_values:
         if item['type'] == 'text':
@@ -231,10 +231,10 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     await state.clear()
 
 
-@router.message(AddItemFSM.waiting_single_value, F.document | F.text)
-async def finish_adding_item_callback_handler(message: Message, state):
+@router.message(AddItemFSM.waiting_single_value, F.document)
+async def finish_adding_file_item(message: Message, state):
     """
-    Create a position and add one "infinite" value. Notify group (if configured).
+    Create a position and add one "infinite" file. Notify group (if configured).
     """
     data = await state.get_data()
     item_name = data.get('item_name')
@@ -242,55 +242,94 @@ async def finish_adding_item_callback_handler(message: Message, state):
     item_price = data.get('item_price')
     category_name = data.get('item_category')
 
-    # Для файловых товаров
-    if message.document:
-        try:
-            # Скачиваем файл
-            document = message.document
-            file_info = await message.bot.get_file(document.file_id)
-            downloaded_file = await message.bot.download_file(file_info.file_path)
-            file_bytes = downloaded_file.read()
-            
-            # Создаем позицию
-            create_item(item_name, item_description, item_price, category_name)
-            
-            # Добавляем файл как бесконечный товар
-            success = add_values_to_item(
-                item_name=item_name,
-                value=message.caption or document.file_name or "Файл",
-                is_infinity=True,
-                is_file=True,
-                file_data=file_bytes,
-                file_name=document.file_name or "file.ovpn",
-                mime_type=document.mime_type or "application/octet-stream",
-                file_size=document.file_size or len(file_bytes)
-            )
-            
-            if success:
-                success_message = f"✅ Позиция создана, файл '{document.file_name}' добавлен"
-            else:
-                success_message = "❌ Не удалось добавить файл (возможно, уже существует)"
-            
-        except Exception as e:
-            await message.answer(f"Ошибка при загрузке файла: {str(e)}")
-            return
-            
-    # Для текстовых товаров
-    elif message.text:
-        single_value = (message.text or "").strip()
-        if not single_value:
-            await message.answer(localize('admin.goods.add.single.empty'), reply_markup=back('goods_management'))
-            return
-
-        # 1) Create position
-        create_item(item_name, item_description, item_price, category_name)
-        # 2) Add 1 "infinite" value
-        add_values_to_item(item_name, single_value, True)
+    try:
+        # Скачиваем файл
+        document = message.document
+        file_info = await message.bot.get_file(document.file_id)
+        downloaded_file = await message.bot.download_file(file_info.file_path)
+        file_bytes = downloaded_file.read()
         
-        success_message = localize('admin.goods.add.single.created')
-    
-    else:
+        # Создаем позицию
+        create_item(item_name, item_description, item_price, category_name)
+        
+        # Добавляем файл как бесконечный товар
+        success = add_values_to_item(
+            item_name=item_name,
+            value=message.caption or document.file_name or "Файл",
+            is_infinity=True,
+            is_file=True,
+            file_data=file_bytes,
+            file_name=document.file_name or "file.ovpn",
+            mime_type=document.mime_type or "application/octet-stream",
+            file_size=document.file_size or len(file_bytes)
+        )
+        
+        if success:
+            success_message = f"✅ Позиция создана, файл '{document.file_name}' добавлен"
+        else:
+            success_message = "❌ Не удалось добавить файл (возможно, уже существует)"
+        
+    except Exception as e:
+        # Очищаем сообщение об ошибке от бинарных данных
+        error_msg = str(e).split('\n')[0]  # Берем только первую строку
+        await message.answer(f"❌ Ошибка при загрузке файла: {error_msg}", reply_markup=back('goods_management'))
         return
+
+    # Optionally notify a channel
+    channel_url = EnvKeys.CHANNEL_URL or ""
+    parsed = urlparse(channel_url)
+    channel_username = (
+                           parsed.path.lstrip('/')
+                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
+                       ) or None
+    if channel_username:
+        try:
+            await message.bot.send_message(
+                chat_id=f"@{channel_username}",
+                text=(
+                    f"🎁 {localize('shop.group.new_upload')}\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
+                    f"📦 {localize('shop.group.count')}: <b>∞</b>"
+                ),
+                parse_mode='HTML'
+            )
+        except TelegramForbiddenError:
+            await message.answer(localize("errors.channel.telegram_forbidden_error", channel=channel_username))
+        except TelegramNotFound:
+            await message.answer(localize("errors.channel.telegram_not_found", channel=channel_username))
+        except TelegramBadRequest as e:
+            await message.answer(localize("errors.channel.telegram_bad_request", e=e))
+
+    await message.answer(success_message, reply_markup=back('goods_management'))
+    admin_info = await message.bot.get_chat(message.from_user.id)
+    audit_logger.info(
+        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite file item "{item_name}"'
+    )
+    await state.clear()
+
+
+@router.message(AddItemFSM.waiting_single_value, F.text)
+async def finish_adding_text_item(message: Message, state):
+    """
+    Create a position and add one "infinite" text value. Notify group (if configured).
+    """
+    data = await state.get_data()
+    item_name = data.get('item_name')
+    item_description = data.get('item_description')
+    item_price = data.get('item_price')
+    category_name = data.get('item_category')
+
+    single_value = (message.text or "").strip()
+    if not single_value:
+        await message.answer(localize('admin.goods.add.single.empty'), reply_markup=back('goods_management'))
+        return
+
+    # 1) Create position
+    create_item(item_name, item_description, item_price, category_name)
+    # 2) Add 1 "infinite" value
+    add_values_to_item(item_name, single_value, True)
+    
+    success_message = localize('admin.goods.add.single.created')
 
     # 3) Optionally notify a channel
     channel_url = EnvKeys.CHANNEL_URL or ""
@@ -320,7 +359,7 @@ async def finish_adding_item_callback_handler(message: Message, state):
     await message.answer(success_message, reply_markup=back('goods_management'))
     admin_info = await message.bot.get_chat(message.from_user.id)
     audit_logger.info(
-        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite item "{item_name}"'
+        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite text item "{item_name}"'
     )
     await state.clear()
 
@@ -336,7 +375,7 @@ async def collect_file_value(message: Message, state):
     item_name = data.get('item_name')
     
     if not item_name:
-        await message.answer("❌ Ошибка: название товара не найдено")
+        await message.answer("❌ Ошибка: название товара не найдено", reply_markup=back('goods_management'))
         return
     
     try:
@@ -346,7 +385,24 @@ async def collect_file_value(message: Message, state):
         downloaded_file = await message.bot.download_file(file_info.file_path)
         file_bytes = downloaded_file.read()
         
-        # Сразу добавляем файл в базу
+        # Сначала создаем товар (если еще не создан)
+        item = await check_item_cached(item_name)
+        if not item:
+            # Получаем остальные данные
+            item_description = data.get('item_description')
+            item_price = data.get('item_price')
+            category_name = data.get('item_category')
+            
+            if not all([item_description, item_price, category_name]):
+                await message.answer(
+                    "❌ Не все данные товара заполнены. Начните добавление заново.",
+                    reply_markup=back('goods_management')
+                )
+                return
+            
+            create_item(item_name, item_description, item_price, category_name)
+        
+        # Добавляем файл в базу
         success = add_values_to_item(
             item_name=item_name,
             value=message.caption or document.file_name or "Файл",
@@ -381,4 +437,12 @@ async def collect_file_value(message: Message, state):
             )
             
     except Exception as e:
-        await message.answer(f"Ошибка при загрузке файла: {str(e)}")
+        # Очищаем сообщение об ошибке от бинарных данных
+        error_msg = str(e).split('\n')[0]  # Берем только первую строку
+        await message.answer(
+            f"❌ Ошибка при загрузке файла: {error_msg}",
+            reply_markup=simple_buttons([
+                (localize('btn.add_values_finish'), "finish_adding_items"),
+                (localize('btn.back'), "goods_management")
+            ], per_row=1)
+        )
