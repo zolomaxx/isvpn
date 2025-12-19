@@ -7,10 +7,11 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.database.models import Permission
 from bot.database.methods import (
-    check_category_cached, check_item_cached, create_item, add_values_to_item
+    check_category_cached, check_item_cached, create_item, add_values_to_item,
+    select_item_values_amount
 )
 from bot.keyboards.inline import back, question_buttons, simple_buttons
-from bot.logger_mesh import audit_logger
+from bot.logger_mesh import audit_logger, logger
 from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
 from bot.i18n import localize
@@ -105,7 +106,7 @@ async def adding_value_to_position(call: CallbackQuery, state):
     await state.update_data(is_infinity=(answer == 'yes'))
 
     if answer == 'no':
-        # “Finish adding” button will appear after the first value is provided
+        # "Finish adding" button will appear after the first value is provided
         await call.message.edit_text(
             localize('admin.goods.add.values.prompt_multi'),
             reply_markup=back("goods_management")
@@ -156,10 +157,16 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     item_description = data.get('item_description')
     item_price = data.get('item_price')
     category_name = data.get('item_category')
+    
+    # Get already added files count from database
+    existing_count = select_item_values_amount(item_name)
+    
     raw_values: list[dict] = data.get("item_values", []) or []
 
-    # Сначала создаем товар (позицию) в базе
-    create_item(item_name, item_description, item_price, category_name)
+    # Create position if not exists
+    item = await check_item_cached(item_name)
+    if not item:
+        create_item(item_name, item_description, item_price, category_name)
 
     added = 0
     skipped_db_dup = 0
@@ -186,10 +193,17 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
             else:
                 skipped_db_dup += 1
 
+    # Total added = already existing files + newly added text items
+    total_added = existing_count + added
+
     text_lines = [
         localize('admin.goods.add.result.created'),
-        localize('admin.goods.add.result.added', n=added)
+        f"📦 Всего товаров добавлено: <b>{total_added}</b>",
+        f"📎 Из них файлов: <b>{existing_count}</b>",
     ]
+    
+    if added > 0:
+        text_lines.append(localize('admin.goods.add.result.added', n=added))
     if skipped_db_dup:
         text_lines.append(localize('admin.goods.add.result.skipped_db_dup', n=skipped_db_dup))
     if skipped_batch_dup:
@@ -213,7 +227,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
                 text=(
                     f"🎁 {localize('shop.group.new_upload')}\n"
                     f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
-                    f"📦 {localize('shop.group.count')}: <b>{added}</b>"
+                    f"📦 {localize('shop.group.count')}: <b>{total_added}</b>"
                 ),
                 parse_mode='HTML'
             )
@@ -226,7 +240,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
 
     admin_info = await call.message.bot.get_chat(call.from_user.id)
     audit_logger.info(
-        f'Admin {call.from_user.id} ({admin_info.first_name}) created a new item "{item_name}"'
+        f'Admin {call.from_user.id} ({admin_info.first_name}) created a new item "{item_name}" with {total_added} items'
     )
     await state.clear()
 
@@ -265,13 +279,14 @@ async def finish_adding_file_item(message: Message, state):
         )
         
         if success:
-            success_message = f"✅ Позиция создана, файл '{document.file_name}' добавлен"
+            success_message = f"✅ Позиция создана, файл '{document.file_name}' добавлен как бесконечный товар"
         else:
             success_message = "❌ Не удалось добавить файл (возможно, уже существует)"
         
     except Exception as e:
         # Очищаем сообщение об ошибке от бинарных данных
         error_msg = str(e).split('\n')[0]  # Берем только первую строку
+        logger.error(f"Error adding file: {e}")
         await message.answer(f"❌ Ошибка при загрузке файла: {error_msg}", reply_markup=back('goods_management'))
         return
 
@@ -364,7 +379,6 @@ async def finish_adding_text_item(message: Message, state):
     await state.clear()
 
 
-# Новый обработчик для загрузки файлов при добавлении обычных товаров
 @router.message(AddItemFSM.waiting_values, F.document)
 async def collect_file_value(message: Message, state):
     """
@@ -416,7 +430,6 @@ async def collect_file_value(message: Message, state):
         
         if success:
             # Получаем текущее количество товаров
-            from bot.database.methods import select_item_values_amount
             count = select_item_values_amount(item_name)
             
             await message.answer(
@@ -439,6 +452,7 @@ async def collect_file_value(message: Message, state):
     except Exception as e:
         # Очищаем сообщение об ошибке от бинарных данных
         error_msg = str(e).split('\n')[0]  # Берем только первую строку
+        logger.error(f"Error in collect_file_value: {e}")
         await message.answer(
             f"❌ Ошибка при загрузке файла: {error_msg}",
             reply_markup=simple_buttons([
