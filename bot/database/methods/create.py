@@ -38,14 +38,20 @@ def create_item(item_name: str, item_description: str, item_price: int, category
         )
 
 
-def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
+def add_values_to_item(item_name: str, value: str, is_infinity: bool, 
+                       is_file: bool = False, file_data: bytes = None, 
+                       file_name: str = None, mime_type: str = None,
+                       file_size: int = None) -> bool:
     """Add item value if not duplicate; True if inserted."""
     value_norm = (value or "").strip()
-    if not value_norm:
+    
+    # Для файловых товаров value может быть пустым
+    if not is_file and not value_norm:
         return False
 
     with Database().session() as s:
-        if s.query(
+        # Проверяем дубликаты только для текстовых товаров
+        if not is_file and s.query(
                 exists().where(
                     ItemValues.item_name == item_name,
                     ItemValues.value == value_norm
@@ -54,7 +60,16 @@ def add_values_to_item(item_name: str, value: str, is_infinity: bool) -> bool:
             return False
 
         try:
-            s.add(ItemValues(name=item_name, value=value_norm, is_infinity=bool(is_infinity)))
+            s.add(ItemValues(
+                name=item_name, 
+                value=value_norm, 
+                is_infinity=bool(is_infinity),
+                is_file=is_file,
+                file_data=file_data,
+                file_name=file_name,
+                mime_type=mime_type,
+                file_size=file_size
+            ))
             return True
         except IntegrityError:
             return False

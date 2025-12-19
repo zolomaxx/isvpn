@@ -115,7 +115,24 @@ def get_bought_item_info(item_id: str) -> dict | None:
     """Return bought item row as dict by row id, or None."""
     with Database().session() as s:
         result = s.query(BoughtGoods).filter(BoughtGoods.id == item_id).first()
-        return result.__dict__ if result else None
+        if result:
+            item_dict = {
+                'id': result.id,
+                'item_name': result.item_name,
+                'value': result.value,
+                'price': result.price,
+                'buyer_id': result.buyer_id,
+                'bought_datetime': result.bought_datetime,
+                'unique_id': result.unique_id,
+                # Информация о файле
+                'is_file': result.is_file,
+                'file_data': result.file_data,
+                'file_name': result.file_name,
+                'mime_type': result.mime_type,
+                'file_size': result.file_size
+            }
+            return item_dict
+        return None
 
 
 def get_item_info(item_name: str) -> dict | None:

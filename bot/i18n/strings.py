@@ -176,6 +176,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.goods.item.not_found": "Товар не найден",
         "admin.goods.prompt.enter_item_name": "Введите название позиции",
         "admin.goods.menu.title": "⛩️ Меню управления позициями",
+        "admin.goods.add.file.uploaded": "✅ Файл «{file_name}» загружен",
+        "admin.goods.add.single.created.file": "✅ Позиция создана, файл добавлен",
+        "shop.purchase.success_with_file": "✅ Товар куплен. <b>Баланс</b>: <i>{balance}</i> {currency}\n\nФайл «{file_name}» отправлен.",
+        "shop.purchase.file_sent": "✅ Файл «{file_name}» отправлен.",
+        "purchases.item.file_info": "<b>📎 Файл</b>: <code>{file_name}</code> ({file_size} байт)",
+        "purchases.item.download": "📥 Скачать файл",
 
         # === Admin: Goods / Items Update Flow ===
         "admin.goods.update.amount.prompt.name": "Введите название позиции",

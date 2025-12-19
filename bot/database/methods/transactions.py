@@ -14,10 +14,9 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
     """
     with Database().session() as s:
         try:
-            # Starting the transaction
             s.begin()
 
-            # 1. Block the user to check the balance
+            # 1. Блокируем пользователя для проверки баланса
             user = s.query(User).filter(
                 User.telegram_id == telegram_id
             ).with_for_update().one_or_none()
@@ -26,7 +25,7 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
                 s.rollback()
                 return False, "user_not_found", None
 
-            # 2. Get information about the product
+            # 2. Получаем информацию о товаре
             goods = s.query(Goods).filter(
                 Goods.name == item_name
             ).with_for_update().one_or_none()
@@ -37,12 +36,12 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
 
             price = Decimal(str(goods.price))
 
-            # 3. Checking the balance
+            # 3. Проверяем баланс
             if user.balance < price:
                 s.rollback()
                 return False, "insufficient_funds", None
 
-            # 4. receive and block the goods for purchase
+            # 4. Получаем и блокируем товар для покупки
             item_value = s.query(ItemValues).filter(
                 ItemValues.item_name == item_name
             ).with_for_update(skip_locked=True).first()
@@ -51,30 +50,41 @@ def buy_item_transaction(telegram_id: int, item_name: str) -> tuple[bool, str, d
                 s.rollback()
                 return False, "out_of_stock", None
 
-            # 5. If the product is not endless, we remove it
+            # 5. Если товар не бесконечный, удаляем его
             if not item_value.is_infinity:
                 s.delete(item_value)
 
-            # 6. Write off the balance
+            # 6. Списываем баланс
             user.balance -= price
 
-            # 7. Create a purchase record
+            # 7. Создаем запись о покупке
             bought_item = BoughtGoods(
                 name=item_name,
-                value=item_value.value,
+                value=item_value.value if not item_value.is_file else item_value.file_name,
                 price=price,
                 buyer_id=telegram_id,
                 bought_datetime=datetime.now(),
-                unique_id=str(randint(1_000_000_000, 9_999_999_999))
+                unique_id=str(randint(1_000_000_000, 9_999_999_999)),
+                # Копируем информацию о файле
+                is_file=item_value.is_file,
+                file_data=item_value.file_data,
+                file_name=item_value.file_name,
+                mime_type=item_value.mime_type,
+                file_size=item_value.file_size
             )
             s.add(bought_item)
 
-            # 8. Commit the transaction
+            # 8. Коммитим транзакцию
             s.commit()
 
             return True, "success", {
                 "item_name": item_name,
                 "value": item_value.value,
+                "is_file": item_value.is_file,
+                "file_data": item_value.file_data,
+                "file_name": item_value.file_name,
+                "mime_type": item_value.mime_type,
+                "file_size": item_value.file_size,
                 "price": float(price),
                 "new_balance": float(user.balance),
                 "unique_id": bought_item.unique_id

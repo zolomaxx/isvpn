@@ -1,8 +1,11 @@
 from urllib.parse import urlparse
 
+import io
+
 from aiogram import Router, F
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
+from aiogram.types import Document
 
 from bot.database.models import Permission
 from bot.database.methods import (
@@ -118,25 +121,157 @@ async def adding_value_to_position(call: CallbackQuery, state):
         await state.set_state(AddItemFSM.waiting_single_value)
 
 
-@router.message(AddItemFSM.waiting_values, F.text)
+@router.message(AddItemFSM.waiting_values, F.text | F.document)
 async def collect_item_value(message: Message, state):
     """
-    Accumulate values in FSM state. After the first one — show a “Finish adding” button.
+    Accumulate values in FSM state. After the first one — show a "Finish adding" button.
     """
     data = await state.get_data()
     values = data.get('item_values', [])
-    value = (message.text or "")
-    values.append(value)
-    await state.update_data(item_values=values)
+    
+    if message.document:
+        # Обрабатываем файл
+        try:
+            # Скачиваем файл
+            document: Document = message.document
+            file_info = await message.bot.get_file(document.file_id)
+            downloaded_file = await message.bot.download_file(file_info.file_path)
+            file_bytes = downloaded_file.read()
+            
+            # Сохраняем информацию о файле
+            file_data = {
+                'type': 'file',
+                'file_data': file_bytes,
+                'file_name': document.file_name,
+                'mime_type': document.mime_type,
+                'file_size': document.file_size,
+                'caption': message.caption or ""
+            }
+            values.append(file_data)
+            
+            await state.update_data(item_values=values)
+            
+            await message.answer(
+                localize('admin.goods.add.file.uploaded', file_name=document.file_name),
+                reply_markup=simple_buttons([
+                    (localize('btn.add_values_finish'), "finish_adding_items"),
+                    (localize('btn.back'), "goods_management")
+                ], per_row=1)
+            )
+            
+        except Exception as e:
+            await message.answer(f"Ошибка при загрузке файла: {e}")
+            
+    elif message.text:
+        # Обрабатываем текст
+        value = message.text
+        values.append({
+            'type': 'text',
+            'value': value,
+            'caption': ''
+        })
+        await state.update_data(item_values=values)
 
-    # Show progress + “Finish adding” button
-    await message.answer(
-        localize('admin.goods.add.values.added', value=value, count=len(values)),
-        reply_markup=simple_buttons([
-            (localize('btn.add_values_finish'), "finish_adding_items"),
-            (localize('btn.back'), "goods_management")
-        ], per_row=1)
+        # Show progress + "Finish adding" button
+        await message.answer(
+            localize('admin.goods.add.values.added', value=value, count=len(values)),
+            reply_markup=simple_buttons([
+                (localize('btn.add_values_finish'), "finish_adding_items"),
+                (localize('btn.back'), "goods_management")
+            ], per_row=1)
+        )
+
+
+@router.message(AddItemFSM.waiting_single_value, F.text | F.document)
+async def finish_adding_item_callback_handler(message: Message, state):
+    """
+    Create a position and add one "infinite" value. Notify group (if configured).
+    """
+    data = await state.get_data()
+    item_name = data.get('item_name')
+    item_description = data.get('item_description')
+    item_price = data.get('item_price')
+    category_name = data.get('item_category')
+
+    if message.document:
+        # Обрабатываем файл
+        try:
+            document: Document = message.document
+            file_info = await message.bot.get_file(document.file_id)
+            downloaded_file = await message.bot.download_file(file_info.file_path)
+            file_bytes = downloaded_file.read()
+            
+            # Создаем позицию
+            create_item(item_name, item_description, item_price, category_name)
+            
+            # Добавляем файл как бесконечный товар
+            add_values_to_item(
+                item_name=item_name,
+                value=message.caption or "",
+                is_infinity=True,
+                is_file=True,
+                file_data=file_bytes,
+                file_name=document.file_name,
+                mime_type=document.mime_type,
+                file_size=document.file_size
+            )
+            
+            success_message = localize('admin.goods.add.single.created.file', 
+                                     file_name=document.file_name)
+            
+        except Exception as e:
+            await message.answer(f"Ошибка при загрузке файла: {e}")
+            return
+            
+    elif message.text:
+        # Обрабатываем текст
+        single_value = (message.text or "").strip()
+        if not single_value:
+            await message.answer(localize('admin.goods.add.single.empty'), 
+                               reply_markup=back('goods_management'))
+            return
+
+        # Создаем позицию
+        create_item(item_name, item_description, item_price, category_name)
+        # Добавляем 1 "бесконечное" значение
+        add_values_to_item(item_name, single_value, True)
+        
+        success_message = localize('admin.goods.add.single.created')
+    
+    else:
+        return
+
+    # Уведомление в канал (если настроено)
+    channel_url = EnvKeys.CHANNEL_URL or ""
+    parsed = urlparse(channel_url)
+    channel_username = (
+        parsed.path.lstrip('/')
+        if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
+    ) or None
+    if channel_username:
+        try:
+            await message.bot.send_message(
+                chat_id=f"@{channel_username}",
+                text=(
+                    f"🎁 {localize('shop.group.new_upload')}\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
+                    f"📦 {localize('shop.group.count')}: <b>∞</b>"
+                ),
+                parse_mode='HTML'
+            )
+        except TelegramForbiddenError:
+            await message.answer(localize("errors.channel.telegram_forbidden_error", channel=channel_username))
+        except TelegramNotFound:
+            await message.answer(localize("errors.channel.telegram_not_found", channel=channel_username))
+        except TelegramBadRequest as e:
+            await message.answer(localize("errors.channel.telegram_bad_request", e=e))
+
+    await message.answer(success_message, reply_markup=back('goods_management'))
+    admin_info = await message.bot.get_chat(message.from_user.id)
+    audit_logger.info(
+        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite item "{item_name}"'
     )
+    await state.clear()
 
 
 @router.callback_query(F.data == 'finish_adding_items', AddItemFSM.waiting_values)
@@ -149,7 +284,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     item_description = data.get('item_description')
     item_price = data.get('item_price')
     category_name = data.get('item_category')
-    raw_values: list[str] = data.get("item_values", []) or []
+    raw_values: list[dict] = data.get("item_values", []) or []
 
     added = 0
     skipped_db_dup = 0
@@ -157,26 +292,44 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     skipped_invalid = 0
     seen_in_batch: set[str] = set()
 
-    # Create position
+    # Создаем позицию
     create_item(item_name, item_description, item_price, category_name)
 
-    for v in raw_values:
-        v_norm = (v or "").strip()
-        if not v_norm:
-            skipped_invalid += 1
-            continue
-
-        # Duplicate within the current input batch
-        if v_norm in seen_in_batch:
-            skipped_batch_dup += 1
-            continue
-        seen_in_batch.add(v_norm)
-
-        # Try to insert — False means it already exists in DB
-        if add_values_to_item(item_name, v_norm, False):
-            added += 1
+    for item in raw_values:
+        if item['type'] == 'file':
+            # Добавляем файл
+            if add_values_to_item(
+                item_name=item_name,
+                value=item.get('caption', ''),
+                is_infinity=False,
+                is_file=True,
+                file_data=item['file_data'],
+                file_name=item['file_name'],
+                mime_type=item['mime_type'],
+                file_size=item['file_size']
+            ):
+                added += 1
+            else:
+                skipped_db_dup += 1
+                
         else:
-            skipped_db_dup += 1
+            # Добавляем текст
+            v_norm = (item['value'] or "").strip()
+            if not v_norm:
+                skipped_invalid += 1
+                continue
+
+            # Дубликат в текущей партии
+            if v_norm in seen_in_batch:
+                skipped_batch_dup += 1
+                continue
+            seen_in_batch.add(v_norm)
+
+            # Пробуем вставить — False означает, что уже существует в БД
+            if add_values_to_item(item_name, v_norm, False):
+                added += 1
+            else:
+                skipped_db_dup += 1
 
     text_lines = [
         localize('admin.goods.add.result.created'),
@@ -191,13 +344,13 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
 
     await call.message.edit_text("\n".join(text_lines), parse_mode="HTML", reply_markup=back("goods_management"))
 
-    # Optionally notify a channel
+    # Опциональное уведомление в канал
     channel_url = EnvKeys.CHANNEL_URL or ""
     parsed = urlparse(channel_url)
     channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
+        parsed.path.lstrip('/')
+        if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
+    ) or None
     if channel_username:
         try:
             await call.bot.send_message(
@@ -219,59 +372,5 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     admin_info = await call.message.bot.get_chat(call.from_user.id)
     audit_logger.info(
         f'Admin {call.from_user.id} ({admin_info.first_name}) created a new item "{item_name}"'
-    )
-    await state.clear()
-
-
-@router.message(AddItemFSM.waiting_single_value, F.text)
-async def finish_adding_item_callback_handler(message: Message, state):
-    """
-    Create a position and add one “infinite” value. Notify group (if configured).
-    """
-    data = await state.get_data()
-    item_name = data.get('item_name')
-    item_description = data.get('item_description')
-    item_price = data.get('item_price')
-    category_name = data.get('item_category')
-
-    single_value = (message.text or "").strip()
-    if not single_value:
-        await message.answer(localize('admin.goods.add.single.empty'), reply_markup=back('goods_management'))
-        return
-
-    # 1) Create position
-    create_item(item_name, item_description, item_price, category_name)
-    # 2) Add 1 “infinite” value
-    add_values_to_item(item_name, single_value, True)
-
-    # 3) Optionally notify a channel
-    channel_url = EnvKeys.CHANNEL_URL or ""
-    parsed = urlparse(channel_url)
-    channel_username = (
-                           parsed.path.lstrip('/')
-                           if parsed.path else channel_url.replace("https://t.me/", "").replace("t.me/", "").lstrip('@')
-                       ) or None
-    if channel_username:
-        try:
-            await message.bot.send_message(
-                chat_id=f"@{channel_username}",
-                text=(
-                    f"🎁 {localize('shop.group.new_upload')}\n"
-                    f"🏷️ {localize('shop.group.item')}: <b>{item_name}</b>\n"
-                    f"📦 {localize('shop.group.count')}: <b>∞</b>"
-                ),
-                parse_mode='HTML'
-            )
-        except TelegramForbiddenError:
-            await message.answer(localize("errors.channel.telegram_forbidden_error", channel=channel_username))
-        except TelegramNotFound:
-            await message.answer(localize("errors.channel.telegram_not_found", channel=channel_username))
-        except TelegramBadRequest as e:
-            await message.answer(localize("errors.channel.telegram_bad_request", e=e))
-
-    await message.answer(localize('admin.goods.add.single.created'), reply_markup=back('goods_management'))
-    admin_info = await message.bot.get_chat(message.from_user.id)
-    audit_logger.info(
-        f'Admin {message.from_user.id} ({admin_info.first_name}) created an infinite item "{item_name}"'
     )
     await state.clear()

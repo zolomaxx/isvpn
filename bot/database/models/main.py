@@ -1,5 +1,6 @@
 import datetime
 from typing import Any
+from sqlalchemy import LargeBinary
 
 from sqlalchemy import (
     Column, Integer, String, BigInteger, ForeignKey, Text, Boolean,
@@ -138,8 +139,16 @@ class ItemValues(Database.BASE):
     id = Column(Integer, primary_key=True)
     item_name = Column(String(100), ForeignKey('goods.name', ondelete="CASCADE", onupdate="CASCADE"), nullable=False,
                        index=True)
-    value = Column(Text, nullable=True)
+    value = Column(Text, nullable=True)  # Может быть NULL для файлов
     is_infinity = Column(Boolean, nullable=False)
+    
+    # Новые поля для файлов
+    is_file = Column(Boolean, default=False, nullable=False)
+    file_data = Column(LargeBinary, nullable=True)
+    file_name = Column(String(255), nullable=True)
+    mime_type = Column(String(100), nullable=True)
+    file_size = Column(Integer, nullable=True)  # Размер в байтах
+    
     item = relationship("Goods", back_populates="values")
 
     __table_args__ = (
@@ -152,13 +161,26 @@ class ItemValues(Database.BASE):
         self.item_name = name
         self.value = value
         self.is_infinity = is_infinity
+        self.is_file = kw.get('is_file', False)
+        self.file_data = kw.get('file_data')
+        self.file_name = kw.get('file_name')
+        self.mime_type = kw.get('mime_type')
+        self.file_size = kw.get('file_size')
 
 
 class BoughtGoods(Database.BASE):
     __tablename__ = 'bought_goods'
     id = Column(Integer, primary_key=True)
     item_name = Column(String(100), nullable=False, index=True)
-    value = Column(Text, nullable=False)
+    value = Column(Text, nullable=False)  # Для обратной совместимости
+    
+    # Новые поля для файлов
+    is_file = Column(Boolean, default=False, nullable=False)
+    file_data = Column(LargeBinary, nullable=True)
+    file_name = Column(String(255), nullable=True)
+    mime_type = Column(String(100), nullable=True)
+    file_size = Column(Integer, nullable=True)
+    
     price = Column(Numeric(12, 2), nullable=False)
     buyer_id = Column(BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     bought_datetime = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -173,6 +195,11 @@ class BoughtGoods(Database.BASE):
         self.buyer_id = buyer_id
         self.bought_datetime = bought_datetime
         self.unique_id = unique_id
+        self.is_file = kw.get('is_file', False)
+        self.file_data = kw.get('file_data')
+        self.file_name = kw.get('file_name')
+        self.mime_type = kw.get('mime_type')
+        self.file_size = kw.get('file_size')
 
 
 class Operations(Database.BASE):

@@ -1,6 +1,7 @@
 import json
 import datetime
 from decimal import Decimal, ROUND_HALF_UP
+from io import BytesIO
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPayment
@@ -459,8 +460,7 @@ async def buy_item_callback_handler(call: CallbackQuery):
                 )
             return
 
-        # Successful purchase - sanitize the output
-
+        # Successful purchase - check if it's a file
         if metrics:
             metrics.track_event("purchase", call.from_user.id, {
                 "item": purchase_request.item_name,
@@ -468,18 +468,48 @@ async def buy_item_callback_handler(call: CallbackQuery):
             })
             metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
 
-        safe_value = sanitize_html(purchase_data['value'])
+        if purchase_data.get('is_file'):
+            # Отправляем файл пользователю
+            file_bytes = purchase_data['file_data']
+            file_name = purchase_data['file_name']
+            mime_type = purchase_data.get('mime_type', 'application/octet-stream')
+            
+            # Создаем BytesIO объект для отправки
+            file_stream = BytesIO(file_bytes)
+            file_stream.name = file_name
+            
+            # Отправляем файл
+            await call.bot.send_document(
+                chat_id=call.from_user.id,
+                document=file_stream,
+                caption=localize('shop.purchase.file_sent', file_name=file_name)
+            )
+            
+            # Обновляем сообщение о покупке
+            await call.message.edit_text(
+                localize(
+                    'shop.purchase.success_with_file',
+                    balance=purchase_data['new_balance'],
+                    file_name=file_name,
+                    currency=EnvKeys.PAY_CURRENCY
+                ),
+                parse_mode='HTML',
+                reply_markup=back(f'item_{purchase_request.item_name}')
+            )
+        else:
+            # Текстовый товар
+            safe_value = sanitize_html(purchase_data['value'])
 
-        await call.message.edit_text(
-            localize(
-                'shop.purchase.success',
-                balance=purchase_data['new_balance'],
-                value=safe_value,
-                currency=EnvKeys.PAY_CURRENCY
-            ),
-            parse_mode='HTML',
-            reply_markup=back(f'item_{purchase_request.item_name}')
-        )
+            await call.message.edit_text(
+                localize(
+                    'shop.purchase.success',
+                    balance=purchase_data['new_balance'],
+                    value=safe_value,
+                    currency=EnvKeys.PAY_CURRENCY
+                ),
+                parse_mode='HTML',
+                reply_markup=back(f'item_{purchase_request.item_name}')
+            )
 
         # Secure logging
         try:

@@ -301,11 +301,65 @@ async def bought_item_info_callback_handler(call: CallbackQuery):
         await call.answer(localize("purchases.item.not_found"), show_alert=True)
         return
 
-    text = "\n".join([
+    # Формируем текст
+    text_lines = [
         localize("purchases.item.name", name=item["item_name"]),
         localize("purchases.item.price", amount=item["price"], currency=EnvKeys.PAY_CURRENCY),
         localize("purchases.item.datetime", dt=item["bought_datetime"]),
         localize("purchases.item.unique_id", uid=item["unique_id"]),
-        localize("purchases.item.value", value=item["value"]),
-    ])
-    await call.message.edit_text(text, parse_mode='HTML', reply_markup=back(back_data))
+    ]
+    
+    # Если это файл
+    if item.get("is_file"):
+        file_size = item.get("file_size", 0)
+        file_name = item.get("file_name", "Без имени")
+        text_lines.append(localize("purchases.item.file_info", 
+                                 file_name=file_name, 
+                                 file_size=file_size))
+        # Добавляем кнопку для скачивания
+        from bot.keyboards.inline import simple_buttons
+        markup = simple_buttons([
+            (localize("purchases.item.download"), f"download_file:{item_id}"),
+            (localize("btn.back"), back_data)
+        ], per_row=1)
+    else:
+        # Текстовый товар
+        text_lines.append(localize("purchases.item.value", value=item["value"]))
+        markup = back(back_data)
+    
+    await call.message.edit_text("\n".join(text_lines), parse_mode='HTML', reply_markup=markup)
+
+@router.callback_query(F.data.startswith('download_file:'))
+async def download_file_callback_handler(call: CallbackQuery):
+    """
+    Send file to user from purchased items.
+    """
+    _, item_id = call.data.split(':', 1)
+    item = get_bought_item_info(item_id)
+    
+    if not item or not item.get("is_file") or not item.get("file_data"):
+        await call.answer(localize("purchases.item.not_found"), show_alert=True)
+        return
+    
+    try:
+        from io import BytesIO
+        
+        file_bytes = item["file_data"]
+        file_name = item.get("file_name", "file")
+        
+        # Создаем BytesIO объект
+        file_stream = BytesIO(file_bytes)
+        file_stream.name = file_name
+        
+        # Отправляем файл
+        await call.bot.send_document(
+            chat_id=call.from_user.id,
+            document=file_stream,
+            caption=localize('shop.purchase.file_sent', file_name=file_name)
+        )
+        
+        await call.answer("Файл отправлен")
+        
+    except Exception as e:
+        logger.error(f"Failed to send file: {e}")
+        await call.answer("Ошибка при отправке файла", show_alert=True)
